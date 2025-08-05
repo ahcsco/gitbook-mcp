@@ -3,7 +3,7 @@ import re
 
 all_docs = []
 
-def find_relevant_content(query: str) -> str:
+def find_relevant_content(query: str):
     global all_docs
     if not all_docs:
         all_docs = get_all_code()
@@ -19,10 +19,16 @@ def find_relevant_content(query: str) -> str:
             scored.append((doc, score))
 
     if not scored:
-        return ""
+        return []
 
-    # Sort by score descending and take top 3
     best = sorted(scored, key=lambda x: x[1], reverse=True)[:3]
 
-    # Join snippets with separators, limit to 1000 chars each
-    return "\n---\n".join([b[0][:1000] for b in best])
+    return [
+        {
+            "title": f"Match {i+1}",
+            "url": "https://github.com/NSO-developer/nso-examples",
+            "content": f"Match Score: {score:.2f}\n\n{doc[:1500]}",
+            "score": score
+        }
+        for i, (doc, score) in enumerate(best)
+    ]
