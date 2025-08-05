@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from app.github_fetcher import load_repo_files
 from app.context_engine import find_relevant_content
+from fastapi import Request
+from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
@@ -37,3 +39,19 @@ async def chat_completion(req: ChatRequest):
 @app.on_event("startup")
 def init():
     load_repo_files()
+
+@app.post("/context")
+async def get_context(request: Request):
+    body = await request.json()
+    query = body.get("query", "")
+    
+    relevant_content = find_relevant_content(query)
+
+    return JSONResponse(content=[
+        {
+            "title": "From NSO Examples Repo",
+            "url": "https://github.com/NSO-developer/nso-examples",
+            "content": relevant_content,
+            "score": 1.0
+        }
+    ])
