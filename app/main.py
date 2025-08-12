@@ -10,7 +10,7 @@ app = FastAPI()
 # Enable CORS for GitBook to access it
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict to GitBook's domain if desired
+    allow_origins=["*"],  # You can restrict this to GitBook's domain if desired
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -53,9 +53,20 @@ async def context_post(request: Request):
         print("⚠️ No results found.")
         return JSONResponse(content=[{
             "title": "No relevant documentation found",
-            "url": "",
-            "content": f"No matches for query: '{query}'",
+            "href": "",
+            "body": f"No matches for query: '{query}'",
             "score": 0
         }])
 
-    return JSONResponse(content=results)
+    # Map to GitBook MCP's expected keys: href + body
+    formatted_results = [
+        {
+            "title": r["title"],
+            "href": r["url"],     # MCP expects 'href', not 'url'
+            "body": r["content"], # MCP expects 'body', not 'content'
+            "score": r["score"]
+        }
+        for r in results
+    ]
+
+    return JSONResponse(content=formatted_results)
