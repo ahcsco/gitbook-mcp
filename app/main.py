@@ -10,64 +10,47 @@ app = FastAPI()
 # Enable CORS for GitBook to access it
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # You can restrict this to GitBook's domain
+    allow_origins=["*"],  # Restrict to GitBook's domain if desired
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# GitBook uses GET / to check the server is alive and to understand what it can do
+# Health check / server info
 @app.get("/")
 async def root():
     return {
         "name": "NSO MCP Server",
-        "description": (
-            "Search and retrieve exact matches for files, configuration snippets, "
-            "and technical references from the NSO example repository. "
-            "Use this tool whenever a query contains a filename "
-            "(e.g., vrouter.yang, netconf-config.xml) or needs specific YANG models, "
-            "XML configurations, or service templates from the repo. "
-            "The server returns relevant file paths, matching snippets, and context "
-            "directly from the source repository."
-        ),
-        "usage_examples": [
-            "Find where vrouter.yang is defined",
-            "Show the XML config for vpn-service-template.xml",
-            "Locate service templates that define vpn",
-            "Get the YANG model for ietf-interfaces.yang"
-        ],
-        "input_format": {
-            "query": "String containing filename, config keyword, or technical term"
-        },
-        "output_format": {
-            "results": [
-                {
-                    "file": "relative/path/to/file",
-                    "snippet": "matching lines or block",
-                    "score": "float between 0 and 1"
-                }
-            ]
-        }
+        "description": "Provides external context for NSO example queries. Can search for file names like 'vrouter.yang' in the example repository."
     }
 
-# Preload the GitHub repo contents at startup
+# Startup: preload the GitHub repo contents
 @app.on_event("startup")
 def startup_event():
     load_repo_files()
     print("✅ MCP server with NSO content is ready.")
 
-# GitBook will call this endpoint to get additional context
+# GET handler for GitBook's MCP discovery ping
+@app.get("/context")
+@app.get("/search")
+async def context_get():
+    return {
+        "name": "NSO Context Provider",
+        "description": "Searches the NSO repository for relevant documentation or file matches. Example: send 'vrouter.yang' to retrieve related context."
+    }
+
+# POST handler for actual context queries
 @app.post("/context")
-async def get_context(request: Request):
+@app.post("/search")
+async def context_post(request: Request):
     body = await request.json()
     query = body.get("query", "")
     print(f"📥 Received query: {query}")
 
     results = find_relevant_content(query)
 
-    # Return a default response if no match is found
     if not results:
-        print(f"⚠️ No results found for '{query}'.")
+        print("⚠️ No results found.")
         return JSONResponse(content=[{
             "title": "No relevant documentation found",
             "url": "",
@@ -75,5 +58,4 @@ async def get_context(request: Request):
             "score": 0
         }])
 
-    print(f"✅ Returning {len(results)} results for '{query}'.")
     return JSONResponse(content=results)
