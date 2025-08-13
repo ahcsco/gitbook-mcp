@@ -33,10 +33,13 @@ def startup_event():
     print("✅ Repo loaded.")
     print("✅ MCP server with NSO content is ready.")
 
-# GitBook MCP handshake endpoint
+# MCP handshake endpoint for GitBook
 @app.get("/context")
-async def get_context_metadata():
+async def get_context_metadata(request: Request):
     """Return MCP capabilities metadata so GitBook knows how to use this server."""
+    headers = dict(request.headers)
+    print(f"📡 GET /context HEADERS: {headers}")
+
     return JSONResponse(
         content={
             "name": "nso-mcp-context",
@@ -51,11 +54,26 @@ async def get_context_metadata():
 @app.post("/context")
 async def search_context(request: Request):
     """Handle search queries from GitBook MCP."""
-    start_time = time.time()
-    body = await request.json()
-    query = body.get("query", "").strip()
+    headers = dict(request.headers)
+    print(f"📡 POST /context HEADERS: {headers}")
 
-    print(f"📥 Received query: {query}")
+    start_time = time.time()
+    try:
+        body = await request.json()
+    except Exception as e:
+        print(f"❌ Failed to parse JSON body: {e}")
+        return JSONResponse(
+            content={"results": [{
+                "title": "Invalid JSON",
+                "href": REPO_URL,
+                "body": "Could not parse the request body.",
+                "description": str(e)
+            }]},
+            media_type="application/json; charset=utf-8"
+        )
+
+    print(f"📥 Received POST body: {body}")
+    query = body.get("query", "").strip()
 
     if not query:
         return JSONResponse(
@@ -83,9 +101,9 @@ async def search_context(request: Request):
             media_type="application/json; charset=utf-8"
         )
 
-    # Prepare MCP-friendly results (limit body to prevent overload)
+    # Limit body size so GitBook UI doesn't hang
     final_results = []
-    for r in results[:5]:  # send max 5
+    for r in results[:5]:
         final_results.append({
             "title": r.get("title", "Match"),
             "href": r.get("url") or REPO_URL,
