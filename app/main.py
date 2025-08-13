@@ -1,5 +1,4 @@
 import time
-import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,28 +6,35 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.github_fetcher import load_repo_files
 from app.context_engine import find_relevant_content
 
+REPO_URL = "https://github.com/NSO-developer/nso-examples"
+
 app = FastAPI()
 
-# Enable CORS for GitBook
+# Enable CORS for GitBook to access it
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # You can restrict to GitBook domains later if you want
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-REPO_URL = "https://github.com/NSO-developer/nso-examples"
+def safe_text(text: str) -> str:
+    """Ensure text is UTF-8 safe and trimmed."""
+    if not isinstance(text, str):
+        text = str(text)
+    return text.encode("utf-8", "ignore").decode("utf-8", "ignore")
 
 @app.get("/")
 async def root():
     return {
         "name": "NSO MCP Server",
-        "description": "Provides external context for NSO example queries."
+        "description": "Provides external context for NSO example queries from the GitHub repository."
     }
 
 @app.on_event("startup")
 def startup_event():
+    print("🔄 Downloading repo...")
     load_repo_files()
     print("✅ MCP server with NSO content is ready.")
 
@@ -44,63 +50,46 @@ async def context_get():
 @app.post("/search")
 async def context_post(request: Request):
     start_time = time.time()
-
-    try:
-        body = await asyncio.wait_for(request.json(), timeout=5)
-    except asyncio.TimeoutError:
-        return JSONResponse(content=[{
-            "title": "Timeout",
-            "href": REPO_URL,
-            "body": "Request body took too long to arrive."
-        }], status_code=408)
-
+    body = await request.json()
     query = body.get("query", "").strip()
     print(f"📥 Received query: {query}")
 
     if not query:
-        return JSONResponse(content=[{
-            "title": "Empty query",
-            "href": REPO_URL,
-            "body": "Please provide a search term."
-        }])
+        return JSONResponse(content={
+            "results": [{
+                "title": "Empty query",
+                "href": REPO_URL,
+                "body": "You did not provide a search term.",
+                "description": "Please enter a search keyword to get results from the NSO examples repository."
+            }]
+        })
 
-    # If user asks for examples, send repo context immediately
-    if "example" in query.lower():
-        return JSONResponse(content=[{
-            "title": "NSO Example Repository",
-            "href": REPO_URL,
-            "body": "The NSO examples repository contains sample services, YANG models, and scripts."
-        }])
-
-    try:
-        results = await asyncio.to_thread(find_relevant_content, query)
-    except Exception as e:
-        print(f"❌ Search error: {e}")
-        return JSONResponse(content=[{
-            "title": "Search error",
-            "href": REPO_URL,
-            "body": f"Error while searching: {e}"
-        }], status_code=500)
+    results = find_relevant_content(query)
 
     if not results:
-        return JSONResponse(content=[{
-            "title": "No relevant documentation found",
-            "href": REPO_URL,
-            "body": f"No matches for query: '{query}'"
-        }])
+        elapsed = round(time.time() - start_time, 2)
+        print(f"⚠️ No results found in {elapsed}s.")
+        return JSONResponse(content={
+            "results": [{
+                "title": "No relevant documentation found",
+                "href": REPO_URL,
+                "body": f"No matches for query: '{query}'",
+                "description": "No files matched your search in the NSO examples repository."
+            }]
+        })
 
-    # Limit and clean results
     formatted = []
-    for r in results[:3]:  # max 3 matches
-        snippet = r.get("content", "")[:1000]  # truncate
+    for r in results[:3]:  # limit to 3 results
+        snippet = safe_text(r.get("content", "")[:1000])
         href = r.get("url") or REPO_URL
         formatted.append({
-            "title": r.get("title", "Match"),
+            "title": safe_text(r.get("title", "Match")),
             "href": href,
-            "body": snippet
+            "body": snippet,
+            "description": "Result from NSO examples repository"
         })
 
     elapsed = round(time.time() - start_time, 2)
     print(f"✅ Search completed in {elapsed}s, returning {len(formatted)} results.")
 
-    return JSONResponse(content=formatted)
+    return JSONResponse(content={"results": formatted})
