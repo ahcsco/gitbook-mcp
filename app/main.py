@@ -10,17 +10,17 @@ REPO_URL = "https://github.com/NSO-developer/nso-examples"
 
 app = FastAPI()
 
-# Enable CORS for GitBook to access it
+# Allow GitBook to connect
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # You can restrict to GitBook domains later if you want
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 def safe_text(text: str) -> str:
-    """Ensure text is UTF-8 safe and trimmed."""
+    """Ensure UTF-8 safe and trimmed."""
     if not isinstance(text, str):
         text = str(text)
     return text.encode("utf-8", "ignore").decode("utf-8", "ignore")
@@ -59,8 +59,8 @@ async def context_post(request: Request):
             "results": [{
                 "title": "Empty query",
                 "href": REPO_URL,
-                "body": "You did not provide a search term.",
-                "description": "Please enter a search keyword to get results from the NSO examples repository."
+                "body": "Please enter a search term.",
+                "description": "No query provided."
             }]
         })
 
@@ -71,25 +71,26 @@ async def context_post(request: Request):
         print(f"⚠️ No results found in {elapsed}s.")
         return JSONResponse(content={
             "results": [{
-                "title": "No relevant documentation found",
+                "title": "No matches found",
                 "href": REPO_URL,
-                "body": f"No matches for query: '{query}'",
-                "description": "No files matched your search in the NSO examples repository."
+                "body": f"No matches for '{query}'.",
+                "description": "No relevant content found in NSO examples repository."
             }]
         })
 
-    formatted = []
-    for r in results[:3]:  # limit to 3 results
-        snippet = safe_text(r.get("content", "")[:1000])
-        href = r.get("url") or REPO_URL
-        formatted.append({
+    # Short result mode: only first match, trimmed to 200 characters
+    r = results[0]
+    snippet = safe_text(r.get("content", ""))[:200]
+    href = r.get("url") or REPO_URL
+
+    elapsed = round(time.time() - start_time, 2)
+    print(f"✅ Short search completed in {elapsed}s.")
+
+    return JSONResponse(content={
+        "results": [{
             "title": safe_text(r.get("title", "Match")),
             "href": href,
             "body": snippet,
-            "description": "Result from NSO examples repository"
-        })
-
-    elapsed = round(time.time() - start_time, 2)
-    print(f"✅ Search completed in {elapsed}s, returning {len(formatted)} results.")
-
-    return JSONResponse(content={"results": formatted})
+            "description": "Short snippet from NSO examples repository"
+        }]
+    })
