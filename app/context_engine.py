@@ -1,5 +1,10 @@
 import re
+import json
+import logging
 from app.github_fetcher import get_all_code
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 all_docs = []  # Global cache for repository content
 
@@ -7,8 +12,9 @@ def initialize_context_engine():
     """Initialize the context engine by loading repository content."""
     global all_docs
     if not all_docs:
+        logger.info("Loading documents into context engine...")
         all_docs = get_all_code()
-        print(f"✅ Loaded {len(all_docs)} documents into context engine.")
+        logger.info(f"✅ Loaded {len(all_docs)} documents into context engine.")
 
 def find_relevant_content(query: str):
     """Find content relevant to the query from the NSO examples repository."""
@@ -16,6 +22,7 @@ def find_relevant_content(query: str):
     if not all_docs:
         initialize_context_engine()
 
+    logger.info(f"Searching for query: {query}")
     query_words = set(re.findall(r"\w+", query.lower()))
     scored = []
 
@@ -29,10 +36,12 @@ def find_relevant_content(query: str):
             scored.append((doc, score, file_name))
 
     if not scored:
+        logger.info("No matching documents found")
         return []
 
     # Sort by score and limit to top 3 results
     best = sorted(scored, key=lambda x: x[1], reverse=True)[:3]
+    logger.info(f"Found {len(best)} matching documents")
 
     return [
         {
