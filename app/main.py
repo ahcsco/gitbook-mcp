@@ -1,17 +1,15 @@
-import time
-import json
+import os
+import shutil
+import subprocess
+import tempfile
+import asyncio  # ✅ FIX: Needed for sleep in async functions
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-
-from app.github_fetcher import load_repo_files
-from app.context_engine import find_relevant_content
-
-REPO_URL = "https://github.com/NSO-developer/nso-examples"
+from fastapi.responses import StreamingResponse, JSONResponse
 
 app = FastAPI()
 
-# Allow GitBook to call this from anywhere
+# Allow all CORS origins for GitBook
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,79 +18,61 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
-async def root():
-    return {
-        "name": "NSO MCP Server",
-        "description": "Provides external context for NSO example queries from the GitHub repository."
-    }
+REPO_URL = os.environ.get("REPO_URL", "https://github.com/your/repo.git")
+TEMP_DIR = tempfile.mkdtemp()
+
+def clone_or_pull_repo():
+    repo_path = os.path.join(TEMP_DIR, "repo")
+    if os.path.exists(repo_path):
+        print("🔄 Downloading repo...")
+        subprocess.run(["git", "-C", repo_path, "pull"], check=False)
+    else:
+        print("🔄 Downloading repo...")
+        subprocess.run(["git", "clone", REPO_URL, repo_path], check=False)
+    print("✅ Repo loaded.")
+    return repo_path
 
 @app.on_event("startup")
-def startup_event():
-    print("🔄 Downloading repo...")
-    load_repo_files()
-    print("✅ Repo loaded.")
+async def startup_event():
+    repo_path = clone_or_pull_repo()
     print("✅ MCP server with NSO content is ready.")
 
-@app.get("/context")
-async def get_context_stream(request: Request):
-    """Handle MCP handshake & live streaming context (SSE)."""
-    headers = dict(request.headers)
-    print(f"📡 GET /context HEADERS: {headers}")
-
-    # If client requests SSE streaming
-    if headers.get("accept") == "text/event-stream":
-        async def event_generator():
-            # Send one initial "ready" event
-            yield f"data: {json.dumps({'results': [{'title': 'Ready', 'href': REPO_URL, 'body': 'MCP server connected', 'description': 'Live stream active'}]})}\n\n"
-            # Keep alive ping every 20 seconds
-            while True:
-                await asyncio.sleep(20)
-                yield ":\n\n"  # SSE comment ping
-
-        return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-    # Fallback: normal metadata JSON
-    return JSONResponse(
-        content={
-            "name": "nso-mcp-context",
-            "description": "Provides search results from the NSO examples GitHub repository.",
-            "capabilities": {"search": True}
-        },
-        media_type="application/json; charset=utf-8"
-    )
-
 @app.post("/context")
-async def search_context(request: Request):
-    """Handle direct search queries from GitBook MCP."""
-    headers = dict(request.headers)
-    print(f"📡 POST /context HEADERS: {headers}")
-
-    start_time = time.time()
+async def context_post(request: Request):
     try:
-        body = await request.json()
+        data = await request.json()
+        query = data.get("query", "").strip()
+        print(f"📥 Received query: {query}")
+
+        # Example search simulation
+        results = []
+        if query:
+            results.append({
+                "title": f"Search result for {query}",
+                "snippet": f"This is a mock result for '{query}'.",
+                "url": f"https://example.com/search?q={query}"
+            })
+
+        print(f"✅ Search completed, returning {len(results)} results.")
+        return JSONResponse(content={"results": results})
     except Exception as e:
-        print(f"❌ Failed to parse JSON body: {e}")
+        print(f"❌ Error in /context POST: {e}")
         return JSONResponse(content={"results": []})
 
-    print(f"📥 Received POST body: {body}")
-    query = body.get("query", "").strip()
+@app.get("/context")
+async def context_get():
+    print("📡 GET /context")
 
-    if not query:
-        return JSONResponse(content={"results": []})
+    async def event_generator():
+        try:
+            yield 'event: ready\ndata: {"results": []}\n\n'
+            await asyncio.sleep(0.1)  # Short pause to keep connection alive briefly
+        except Exception as e:
+            print(f"❌ Error in SSE stream: {e}")
+            yield 'event: error\ndata: {}\n\n'
 
-    results = find_relevant_content(query)
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-    final_results = []
-    for r in results[:5]:
-        final_results.append({
-            "title": r.get("title", "Match"),
-            "href": r.get("url") or REPO_URL,
-            "body": r.get("content", "")[:500],
-            "description": "Snippet from NSO examples repository"
-        })
-
-    elapsed = round(time.time() - start_time, 2)
-    print(f"✅ Search completed in {elapsed}s, returning {len(final_results)} results.")
-
-    return JSONResponse(content={"results": final_results})
+@app.on_event("shutdown")
+async def shutdown_event():
+    shutil.rmtree(TEMP_DIR, ignore_errors=True)
