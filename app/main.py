@@ -1,13 +1,15 @@
 import asyncio
+import json
+import os
+import logging
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from app.context_engine import find_relevant_content, initialize_context_engine
 from app.github_fetcher import load_repo_files, get_all_code
-import logging
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
@@ -57,12 +59,14 @@ async def context_get(request: Request):
             logger.info("Sending initial 'ready' event")
             yield 'event: ready\ndata: {"results": []}\n\n'
 
-            # Check for query parameter (GitBook might send query via GET)
+            # Check for query parameter
             query = request.query_params.get("query", "").strip()
             if query:
                 logger.info(f"Received GET query: {query}")
                 results = find_relevant_content(query)
-                yield f'event: results\ndata: {{"results": {json.dumps(results)}}}\n\n'
+                yield f'event: results\ndata: {json.dumps({"results": results})}\n\n'
+            else:
+                logger.info("No query parameter provided in GET request")
 
             # Keep the connection alive with periodic pings
             while True:
@@ -71,24 +75,23 @@ async def context_get(request: Request):
                     break
                 logger.debug("Sending ping event")
                 yield 'event: ping\ndata: {"status": "alive"}\n\n'
-                await asyncio.sleep(10)  # Reduced to 10 seconds for more frequent pings
+                await asyncio.sleep(5)  # Reduced to 5 seconds for frequent pings
         except Exception as e:
             logger.error(f"❌ Error in SSE stream: {e}")
-            yield 'event: error\ndata: {}\n\n'
+            yield 'event: error\ndata: {"error": "Internal server error"}\n\n'
 
-    logger.info("Establishing SSE connection for /context GET")
+    logger.info(f"Establishing SSE connection for /context GET with params: {request.query_params}")
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.on_event("shutdown")
 async def shutdown_event():
     logger.info("🛑 MCP server shutting down.")
 
-# Debug endpoint to list files (optional, for troubleshooting)
 @app.get("/debug/files")
 async def debug_files():
     files = []
-    for root, dirs, files in os.walk("/tmp/nso-examples-main"):
-        for f in files:
+    for root, dirs, files_list in os.walk("/tmp/nso-examples-main"):
+        for f in files_list:
             files.append(os.path.join(root, f))
     logger.info(f"Returning list of {len(files)} files in /tmp/nso-examples-main")
     return JSONResponse(content={"files": files})
