@@ -2,6 +2,8 @@ import asyncio
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
+from app.context_engine import find_relevant_content, initialize_context_engine
+from app.github_fetcher import load_repo_files, get_all_code
 
 app = FastAPI()
 
@@ -16,7 +18,13 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup_event():
-    print("✅ MCP server with NSO content is ready.")
+    print("🔄 Loading NSO examples repository...")
+    try:
+        load_repo_files()  # Download and extract repo
+        initialize_context_engine()  # Initialize context engine
+        print("✅ MCP server with NSO content is ready.")
+    except Exception as e:
+        print(f"❌ Failed to load repository: {e}")
 
 @app.post("/context")
 async def context_post(request: Request):
@@ -24,25 +32,29 @@ async def context_post(request: Request):
         data = await request.json()
         query = data.get("query", "").strip()
 
-        results = []
-        if query:
-            results.append({
-                "title": f"Search result for {query}",
-                "snippet": f"This is a mock result for '{query}'.",
-                "url": f"https://example.com/search?q={query}"
-            })
+        if not query:
+            return JSONResponse(content={"results": []})
 
+        results = find_relevant_content(query)
         return JSONResponse(content={"results": results})
     except Exception as e:
         print(f"❌ Error in /context POST: {e}")
-        return JSONResponse(content={"results": []})
+        return JSONResponse(content={"results": []}, status_code=500)
 
 @app.get("/context")
-async def context_get():
+async def context_get(request: Request):
     async def event_generator():
         try:
+            # Send initial ready event
             yield 'event: ready\ndata: {"results": []}\n\n'
-            await asyncio.sleep(0.1)
+            
+            # Keep the connection alive with periodic pings
+            while True:
+                if await request.is_disconnected():
+                    print("🔌 Client disconnected from SSE stream")
+                    break
+                yield 'event: ping\ndata: {"status": "alive"}\n\n'
+                await asyncio.sleep(30)  # Send ping every 30 seconds
         except Exception as e:
             print(f"❌ Error in SSE stream: {e}")
             yield 'event: error\ndata: {}\n\n'
@@ -52,3 +64,12 @@ async def context_get():
 @app.on_event("shutdown")
 async def shutdown_event():
     print("🛑 MCP server shutting down.")
+
+# Debug endpoint to list files (optional, for troubleshooting)
+@app.get("/debug/files")
+async def debug_files():
+    files = []
+    for root, dirs, files in os.walk("/tmp/nso-examples-main"):
+        for f in files:
+            files.append(os.path.join(root, f))
+    return JSONResponse(content={"files": files})
