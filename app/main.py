@@ -79,17 +79,52 @@ async def context_post(request: Request):
     try:
         data = await request.json()
         query = data.get("query", "").strip()
+        file_path = data.get("file_path", "").strip()
         query_id = str(uuid.uuid4())
-        logger.info(f"Received POST request with query: {query}, headers: {dict(request.headers)}, body: {data}")
+        logger.info(f"Received POST request with query: {query}, file_path: {file_path}, headers: {dict(request.headers)}, body: {data}")
+
+        if file_path:
+            # Handle nso_get_file tool
+            try:
+                content = get_all_code([file_path])[0]["content"]
+                payload = {
+                    "query_id": query_id,
+                    "context_id": str(uuid.uuid4()),
+                    "query": query,
+                    "tool": "nso_get_file",
+                    "results": [{
+                        "title": f"File: {os.path.basename(file_path)}",
+                        "url": f"https://github.com/NSO-developer/nso-examples/blob/main/{file_path}",
+                        "file_path": file_path,
+                        "content": content,
+                        "metadata": {"file_name": os.path.basename(file_path)},
+                        "score": 1.0
+                    }]
+                }
+                logger.info(f"Returning file content for {file_path}")
+                return JSONResponse(content=payload)
+            except Exception as e:
+                logger.error(f"❌ Error fetching file {file_path}: {e}")
+                return JSONResponse(content={"results": [], "error": f"File not found: {file_path}"}, status_code=404)
 
         if not query:
             logger.info("No query provided, returning default results")
-            results = find_relevant_content("vrouter")  # Default query
+            results = find_relevant_content("vrouter")
             payload = {
                 "query_id": query_id,
                 "context_id": str(uuid.uuid4()),
                 "query": "vrouter",
-                "results": results
+                "tool": "nso_search_content",
+                "results": [
+                    {
+                        "title": r["title"],
+                        "url": r["url"],
+                        "file_path": r["url"].split("/blob/main/")[1],
+                        "content": r["content"],
+                        "metadata": {"file_name": r["url"].split("/")[-1]},
+                        "score": r["score"]
+                    } for r in results
+                ]
             }
             return JSONResponse(content=payload)
 
@@ -98,7 +133,17 @@ async def context_post(request: Request):
             "query_id": query_id,
             "context_id": str(uuid.uuid4()),
             "query": query,
-            "results": results
+            "tool": "nso_search_content",
+            "results": [
+                {
+                    "title": r["title"],
+                    "url": r["url"],
+                    "file_path": r["url"].split("/blob/main/")[1],
+                    "content": r["content"],
+                    "metadata": {"file_name": r["url"].split("/")[-1]},
+                    "score": r["score"]
+                } for r in results
+            ]
         }
         logger.info(f"Returning {len(results)} results for query: {query}")
         return JSONResponse(content=payload)
@@ -118,45 +163,84 @@ async def context_get(request: Request):
             # Send initial ready event
             yield f'event: ready\ndata: {json.dumps({"query_id": query_id, "results": [], "tools": MCP_TOOLS})}\n\n'
 
-            # Check for query in query params, headers, or body
+            # Check for query or file_path in query params, headers, or body
             query = request.query_params.get("query", "").strip()
-            if not query:
+            file_path = request.query_params.get("file_path", "").strip()
+            if not query and not file_path:
                 query = request.headers.get("x-search-query", "").strip()
-            if not query:
+                file_path = request.headers.get("x-file-path", "").strip()
+            if not query and not file_path:
                 try:
                     async for chunk in request.stream():
                         try:
                             body = json.loads(chunk.decode('utf-8'))
                             query = body.get("query", "").strip()
+                            file_path = body.get("file_path", "").strip()
                             logger.info(f"Received body data: {body}")
-                            if query:
+                            if query or file_path:
                                 break
                         except json.JSONDecodeError:
                             logger.warning(f"Failed to parse body chunk as JSON: {chunk.decode('utf-8')}")
                 except Exception as e:
                     logger.error(f"Error reading request body: {e}")
 
-            # Use default query if none provided
+            if file_path:
+                # Handle nso_get_file tool
+                try:
+                    content = get_all_code([file_path])[0]["content"]
+                    payload = {
+                        "query_id": query_id,
+                        "context_id": str(uuid.uuid4()),
+                        "query": query,
+                        "tool": "nso_get_file",
+                        "results": [{
+                            "title": f"File: {os.path.basename(file_path)}",
+                            "url": f"https://github.com/NSO-developer/nso-examples/blob/main/{file_path}",
+                            "file_path": file_path,
+                            "content": content,
+                            "metadata": {"file_name": os.path.basename(file_path)},
+                            "score": 1.0
+                        }]
+                    }
+                    yield f'event: results\ndata: {json.dumps(payload)}\n\n'
+                    yield f'event: message\ndata: {json.dumps(payload)}\n\n'
+                    yield f'event: search\ndata: {json.dumps(payload)}\n\n'
+                    yield f'event: update\ndata: {json.dumps(payload)}\n\n'
+                    yield f'event: data\ndata: {json.dumps(payload)}\n\n'
+                    return
+                except Exception as e:
+                    logger.error(f"❌ Error fetching file {file_path}: {e}")
+                    yield f'event: error\ndata: {json.dumps({"error": f"File not found: {file_path}", "query_id": query_id})}\n\n'
+                    return
+
             if not query:
                 query = "vrouter"
                 logger.info("No query provided, using default query: vrouter")
 
-            if query:
-                logger.info(f"Processing query: {query}")
-                last_query = query
-                results = find_relevant_content(query)
-                payload = {
-                    "query_id": query_id,
-                    "context_id": str(uuid.uuid4()),
-                    "query": query,
-                    "results": results,
-                    "tool": "nso_search_content"
-                }
-                yield f'event: results\ndata: {json.dumps(payload)}\n\n'
-                yield f'event: message\ndata: {json.dumps(payload)}\n\n'
-                yield f'event: search\ndata: {json.dumps(payload)}\n\n'
-                yield f'event: update\ndata: {json.dumps(payload)}\n\n'
-                yield f'event: data\ndata: {json.dumps(payload)}\n\n'
+            logger.info(f"Processing query: {query}")
+            last_query = query
+            results = find_relevant_content(query)
+            payload = {
+                "query_id": query_id,
+                "context_id": str(uuid.uuid4()),
+                "query": query,
+                "tool": "nso_search_content",
+                "results": [
+                    {
+                        "title": r["title"],
+                        "url": r["url"],
+                        "file_path": r["url"].split("/blob/main/")[1],
+                        "content": r["content"],
+                        "metadata": {"file_name": r["url"].split("/")[-1]},
+                        "score": r["score"]
+                    } for r in results
+                ]
+            }
+            yield f'event: results\ndata: {json.dumps(payload)}\n\n'
+            yield f'event: message\ndata: {json.dumps(payload)}\n\n'
+            yield f'event: search\ndata: {json.dumps(payload)}\n\n'
+            yield f'event: update\ndata: {json.dumps(payload)}\n\n'
+            yield f'event: data\ndata: {json.dumps(payload)}\n\n'
 
             # Keep connection alive with periodic pings and results
             while True:
@@ -170,8 +254,17 @@ async def context_get(request: Request):
                         "query_id": query_id,
                         "context_id": str(uuid.uuid4()),
                         "query": last_query,
-                        "results": results,
-                        "tool": "nso_search_content"
+                        "tool": "nso_search_content",
+                        "results": [
+                            {
+                                "title": r["title"],
+                                "url": r["url"],
+                                "file_path": r["url"].split("/blob/main/")[1],
+                                "content": r["content"],
+                                "metadata": {"file_name": r["url"].split("/")[-1]},
+                                "score": r["score"]
+                            } for r in results
+                        ]
                     }
                     yield f'event: results\ndata: {json.dumps(payload)}\n\n'
                 await asyncio.sleep(3)
