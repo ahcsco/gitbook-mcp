@@ -10,7 +10,7 @@ REPO_URL = "https://github.com/NSO-developer/nso-examples"
 
 app = FastAPI()
 
-# Allow GitBook to connect
+# Allow GitBook to call this from anywhere
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,12 +18,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-def safe_text(text: str) -> str:
-    """Ensure UTF-8 safe and trimmed."""
-    if not isinstance(text, str):
-        text = str(text)
-    return text.encode("utf-8", "ignore").decode("utf-8", "ignore")
 
 @app.get("/")
 async def root():
@@ -36,61 +30,73 @@ async def root():
 def startup_event():
     print("🔄 Downloading repo...")
     load_repo_files()
+    print("✅ Repo loaded.")
     print("✅ MCP server with NSO content is ready.")
 
+# GitBook MCP handshake endpoint
 @app.get("/context")
-@app.get("/search")
-async def context_get():
-    return {
-        "name": "NSO Context Provider",
-        "description": "Searches the NSO repository for relevant documentation or file matches."
-    }
+async def get_context_metadata():
+    """Return MCP capabilities metadata so GitBook knows how to use this server."""
+    return JSONResponse(
+        content={
+            "name": "nso-mcp-context",
+            "description": "Provides search results from the NSO examples GitHub repository.",
+            "capabilities": {
+                "search": True
+            }
+        },
+        media_type="application/json; charset=utf-8"
+    )
 
 @app.post("/context")
-@app.post("/search")
-async def context_post(request: Request):
+async def search_context(request: Request):
+    """Handle search queries from GitBook MCP."""
     start_time = time.time()
     body = await request.json()
     query = body.get("query", "").strip()
+
     print(f"📥 Received query: {query}")
 
     if not query:
-        return JSONResponse(content={
-            "results": [{
+        return JSONResponse(
+            content={"results": [{
                 "title": "Empty query",
                 "href": REPO_URL,
                 "body": "Please enter a search term.",
                 "description": "No query provided."
-            }]
-        })
+            }]},
+            media_type="application/json; charset=utf-8"
+        )
 
     results = find_relevant_content(query)
 
     if not results:
         elapsed = round(time.time() - start_time, 2)
         print(f"⚠️ No results found in {elapsed}s.")
-        return JSONResponse(content={
-            "results": [{
+        return JSONResponse(
+            content={"results": [{
                 "title": "No matches found",
                 "href": REPO_URL,
                 "body": f"No matches for '{query}'.",
                 "description": "No relevant content found in NSO examples repository."
-            }]
+            }]},
+            media_type="application/json; charset=utf-8"
+        )
+
+    # Prepare MCP-friendly results (limit body to prevent overload)
+    final_results = []
+    for r in results[:5]:  # send max 5
+        final_results.append({
+            "title": r.get("title", "Match"),
+            "href": r.get("url") or REPO_URL,
+            "body": r.get("content", "")[:500],
+            "description": "Snippet from NSO examples repository"
         })
 
-    # Short result mode: only first match, trimmed to 200 characters
-    r = results[0]
-    snippet = safe_text(r.get("content", ""))[:200]
-    href = r.get("url") or REPO_URL
-
     elapsed = round(time.time() - start_time, 2)
-    print(f"✅ Short search completed in {elapsed}s.")
+    print(f"✅ Search completed in {elapsed}s, returning {len(final_results)} results.")
 
-    return JSONResponse(content={
-        "results": [{
-            "title": safe_text(r.get("title", "Match")),
-            "href": href,
-            "body": snippet,
-            "description": "Short snippet from NSO examples repository"
-        }]
-    })
+    return JSONResponse(
+        content={"results": final_results},
+        media_type="application/json; charset=utf-8"
+    )
