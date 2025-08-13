@@ -38,7 +38,7 @@ async def context_post(request: Request):
     try:
         data = await request.json()
         query = data.get("query", "").strip()
-        logger.info(f"Received POST request with query: {query}")
+        logger.info(f"Received POST request with query: {query}, headers: {dict(request.headers)}")
 
         if not query:
             logger.info("No query provided, returning empty results")
@@ -53,34 +53,53 @@ async def context_post(request: Request):
 
 @app.get("/context")
 async def context_get(request: Request):
+    last_query = None  # Store last query for continuous results
     async def event_generator():
+        nonlocal last_query
         try:
+            # Log full request details
+            logger.info(f"Establishing SSE connection for /context GET with params: {request.query_params}, headers: {dict(request.headers)}")
+
             # Send initial ready event
             logger.info("Sending initial 'ready' event")
             yield 'event: ready\ndata: {"results": []}\n\n'
 
-            # Check for query parameter
+            # Check for query in query params, headers, or body
             query = request.query_params.get("query", "").strip()
+            if not query:
+                query = request.headers.get("x-search-query", "").strip()  # Check headers
+            if not query:
+                try:
+                    body = await request.json()
+                    query = body.get("query", "").strip()
+                except:
+                    pass
+
             if query:
-                logger.info(f"Received GET query: {query}")
+                logger.info(f"Received query: {query}")
+                last_query = query
                 results = find_relevant_content(query)
                 yield f'event: results\ndata: {json.dumps({"results": results})}\n\n'
+                yield f'event: message\ndata: {json.dumps({"results": results})}\n\n'
+                yield f'event: search\ndata: {json.dumps({"results": results})}\n\n'
             else:
-                logger.info("No query parameter provided in GET request")
+                logger.info("No query provided in GET request")
 
-            # Keep the connection alive with periodic pings
+            # Keep connection alive with periodic pings and results
             while True:
                 if await request.is_disconnected():
                     logger.info("🔌 Client disconnected from SSE stream")
                     break
                 logger.debug("Sending ping event")
                 yield 'event: ping\ndata: {"status": "alive"}\n\n'
-                await asyncio.sleep(5)  # Reduced to 5 seconds for frequent pings
+                if last_query:  # Resend results for last query
+                    results = find_relevant_content(last_query)
+                    yield f'event: results\ndata: {json.dumps({"results": results})}\n\n'
+                await asyncio.sleep(3)  # Reduced to 3 seconds for frequent updates
         except Exception as e:
             logger.error(f"❌ Error in SSE stream: {e}")
             yield 'event: error\ndata: {"error": "Internal server error"}\n\n'
 
-    logger.info(f"Establishing SSE connection for /context GET with params: {request.query_params}")
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.on_event("shutdown")
