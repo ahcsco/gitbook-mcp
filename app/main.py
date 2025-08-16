@@ -1,42 +1,35 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-import uvicorn
+import logging
+from app.context_engine import find_relevant_content, initialize_context_engine
 
 app = FastAPI()
 
-# Simple in-memory "index" for demo purposes.
-# Replace with actual repo content later.
-EXAMPLE_RESULTS = [
-    {
-        "title": "Match 1",
-        "href": "https://github.com/NSO-developer/nso-examples",
-        "body": "Nano Services for Staged Provisioning of a Virtual Router",
-        "description": "Example NSO repo snippet"
-    }
-]
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("🔄 Initializing...")
+    initialize_context_engine()
+    logger.info("✅ Ready.")
+
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "MCP server is running."}
+    return {"status": "ok", "message": "MCP server running"}
+
 
 @app.post("/context")
 async def context(request: Request):
-    data = await request.json()
-    query = data.get("query", "").lower()
+    try:
+        body = await request.json()
+        query = body.get("query", "")
+        logger.info(f"📥 Query: {query}")
 
-    # For now, always return EXAMPLE_RESULTS (stub)
-    # Later you can plug in real search logic here
-    results = []
-    for item in EXAMPLE_RESULTS:
-        if query in item["body"].lower() or query in item["title"].lower():
-            results.append(item)
-
-    # If no matches, just return default
-    if not results:
-        results = EXAMPLE_RESULTS
-
-    return JSONResponse(content={"results": results})
-
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+        results = find_relevant_content(query)
+        return JSONResponse(content={"results": results})
+    except Exception as e:
+        logger.error(f"❌ Error in /context: {e}")
+        return JSONResponse(content={"results": []}, status_code=500)
