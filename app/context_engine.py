@@ -1,54 +1,51 @@
 import re
-import json
 import logging
 from app.github_fetcher import get_all_code
 
-# Set up logging
 logger = logging.getLogger(__name__)
 
-all_docs = []  # Global cache for repository content
+all_docs = []  # cache
+
 
 def initialize_context_engine():
-    """Initialize the context engine by loading repository content."""
+    """Load repo files into memory."""
     global all_docs
     if not all_docs:
-        logger.info("Loading documents into context engine...")
+        logger.info("Loading repo content...")
         all_docs = get_all_code()
-        logger.info(f"✅ Loaded {len(all_docs)} documents into context engine.")
+        logger.info(f"✅ Loaded {len(all_docs)} docs.")
+
 
 def find_relevant_content(query: str):
-    """Find content relevant to the query from the NSO examples repository."""
+    """Naive keyword search across repo files."""
     global all_docs
     if not all_docs:
         initialize_context_engine()
 
-    logger.info(f"Searching for query: {query}")
     query_words = set(re.findall(r"\w+", query.lower()))
-    scored = []
+    if not query_words:
+        return []
 
+    scored = []
     for doc in all_docs:
         doc_words = set(re.findall(r"\w+", doc.lower()))
         common = query_words.intersection(doc_words)
-        score = len(common) / len(query_words)  # Normalize score by query length
+        score = len(common) / len(query_words)
         if score > 0:
-            # Extract file name from the document (first line after ###)
             file_name = doc.split('\n')[0].replace('### ', '') if doc.startswith('### ') else 'Unknown'
             scored.append((doc, score, file_name))
 
     if not scored:
-        logger.info("No matching documents found")
         return []
 
-    # Sort by score and limit to top 3 results
     best = sorted(scored, key=lambda x: x[1], reverse=True)[:3]
-    logger.info(f"Found {len(best)} matching documents")
 
     return [
         {
             "title": f"Match in {file_name}",
             "url": f"https://github.com/NSO-developer/nso-examples/blob/main/{file_name}",
-            "content": f"Match Score: {score:.2f}\n\n{doc[:1500]}",
-            "score": score
+            "content": f"Score: {score:.2f}\n\n{doc[:1200]}",
+            "score": score,
         }
-        for i, (doc, score, file_name) in enumerate(best)
+        for doc, score, file_name in best
     ]
